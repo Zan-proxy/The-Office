@@ -14,3 +14,8 @@ Gli errori più comuni nel compilare JSON sono questi:
 Se sbagli una virgola, il menu dei brani non compare più. In quel caso riapri songs.json su GitHub, correggi e conferma di nuovo. Se vuoi controllare prima di confermare, incolla il contenuto in jsonlint.com.
 
 Dopo il commit, GitHub Pages impiega uno o due minuti ad aggiornarsi. Poi apri l’app con la rete accesa e il nuovo brano compare nel menu.
+
+### SONGS UPLOAD
+Chi ha scaricato l’app la aggiorna automaticamente alla prossima apertura con rete internet accesa, l'App scarica da sola tutti i brani, così restano disponibili anche offline.
+
+Il pulsante «Testo e file» permette di provare un brano solo sul telefono dell'utente, senza condividerlo con la band.
