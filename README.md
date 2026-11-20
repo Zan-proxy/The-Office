@@ -1,7 +1,7 @@
 # The-Office
 Questa Repo contiene gli sviluppi, le canzoni e tutte la creatività della mitica band dei: The Office
 
-### SONGS JSON
+### SONGS UPDATE
 Ogni volta che aggiungi una canzone devi aggiornare anche il JSON con l'elenco dei brani.
 
 Gli errori più comuni nel compilare JSON sono questi:
