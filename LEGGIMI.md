@@ -40,4 +40,4 @@ Il pulsante «Testo e file» resta disponibile per provare un brano solo sul tuo
 
 ## 5. Aggiornamenti dell'app
 Se modifichi i file, carica la nuova versione su GitHub e cambia il numero in `sw.js`
-(`leggio-v1` diventa `leggio-v2`), altrimenti i telefoni tengono la copia vecchia.
+(`leggio-v4` diventa `leggio-v5`), altrimenti i telefoni tengono la copia vecchia.
