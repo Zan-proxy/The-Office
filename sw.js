@@ -1,6 +1,6 @@
 // Service worker: salva l'app sul telefono per usarla anche senza rete.
 // Quando pubblichi una nuova versione, cambia il numero qui sotto.
-const CACHE = 'leggio-v4';
+const CACHE = 'leggio-v5';
 const CORE = ['./', 'index.html', 'manifest.json', 'apple-touch-icon.png',
               'icon-192.png', 'icon-512.png', 'icon-maskable-512.png',
               'songs.json', 'songs/back-to-black.txt'];

@@ -144,12 +144,14 @@ button{cursor:pointer}
       </label>
       <div class="btns">
         <button id="btnApply" class="solid" type="button">Usa questo testo</button>
-        <button id="btnFile" class="ghost" type="button">Carica file .txt</button>
+        <button id="btnFile" class="ghost" type="button">Carica file (.txt o .html)</button>
+        <button id="btnDownload" class="ghost" type="button">Scarica come .txt</button>
         <button id="btnSample" class="ghost" type="button">Esempio: Back to Black (solo accordi)</button>
         <button id="btnClose" class="ghost" type="button">Chiudi</button>
-        <input id="file" type="file" accept=".txt,.text,text/plain" hidden>
+        <input id="file" type="file" accept=".txt,.text,.html,.htm,text/plain,text/html" hidden>
       </div>
       <ul>
+        <li>Un PDF convertito in HTML (per esempio da pdf2htmlEX) viene letto dal file: l’app ricostruisce righe e battute della tab. Controlla il risultato e, se va bene, usa «Scarica come .txt» per averne una copia leggera.</li>
         <li>Il testo resta sul tuo dispositivo: viene letto dal browser e non viene inviato da nessuna parte.</li>
         <li>Le righe di accordi sopra al testo funzionano come nei file di Ultimate Guitar. Ogni accordo dura il numero di battute scelto in basso.</li>
         <li>Le righe che finiscono con due punti (<code>Verse 1:</code>, <code>Chorus:</code>) sono titoli di sezione e non contano nel tempo.</li>
@@ -298,6 +300,280 @@ function parse(src){
   return blocks;
 }
 /*#parse-end*/
+
+/*#import-start*/
+function medianOf(a){
+  if(!a.length) return 0;
+  var s=a.slice().sort(function(x,y){return x-y;}),m=s.length>>1;
+  return s.length%2?s[m]:(s[m-1]+s[m])/2;
+}
+function rep(ch,n){ return n>0?new Array(n+1).join(ch):''; }
+
+/* Cerca nell'immagine di sfondo le righe del rigo tablatura e le stanghette di battuta. */
+function detectStaves(g,w,h){
+  var thr=160,rowCnt=new Int32Array(h),minX=new Int32Array(h),maxX=new Int32Array(h),x,y;
+  for(y=0;y<h;y++){
+    var c=0,base=y*w,mn=w,mx=-1;
+    for(x=0;x<w;x++){ if(g[base+x]<thr){ c++; if(x<mn)mn=x; mx=x; } }
+    rowCnt[y]=c; minX[y]=mn; maxX[y]=mx;
+  }
+  var lines=[],y0=-1;
+  for(y=0;y<=h;y++){
+    var on=y<h&&rowCnt[y]>w*0.25;
+    if(on&&y0<0) y0=y;
+    if(!on&&y0>=0){
+      var xs=w,xe=-1;
+      for(var k=y0;k<y;k++){ if(minX[k]<xs)xs=minX[k]; if(maxX[k]>xe)xe=maxX[k]; }
+      lines.push({y:(y0+y-1)/2,x0:xs,x1:xe}); y0=-1;
+    }
+  }
+  var groups=[],cur=[];
+  lines.forEach(function(L){
+    if(!cur.length){ cur=[L]; return; }
+    var gap=L.y-cur[cur.length-1].y;
+    if(cur.length===1){ if(gap<=60) cur.push(L); else{ groups.push(cur); cur=[L]; } return; }
+    var first=cur[1].y-cur[0].y;
+    if(Math.abs(gap-first)<=Math.max(2,first*0.2)) cur.push(L); else{ groups.push(cur); cur=[L]; }
+  });
+  if(cur.length) groups.push(cur);
+  var staves=[];
+  groups.forEach(function(grp){
+    if(grp.length<4||grp.length>8) return;
+    var x0=medianOf(grp.map(function(l){return l.x0;})),x1=medianOf(grp.map(function(l){return l.x1;}));
+    var yTop=Math.round(grp[0].y),yBot=Math.round(grp[grp.length-1].y),span=yBot-yTop+1;
+    var cols=[];
+    for(x=Math.max(0,Math.floor(x0)-4);x<=Math.min(w-1,Math.ceil(x1)+4);x++){
+      var d=0;
+      for(y=yTop;y<=yBot;y++){ if(g[y*w+x]<thr) d++; }
+      if(d>=span*0.92) cols.push(x);
+    }
+    var bars=[],run=[];
+    cols.forEach(function(cx){
+      if(run.length&&cx-run[run.length-1]>1){ bars.push((run[0]+run[run.length-1])/2); run=[]; }
+      run.push(cx);
+    });
+    if(run.length) bars.push((run[0]+run[run.length-1])/2);
+    staves.push({
+      lines:grp.map(function(l){return l.y/h;}),
+      sp:(grp[grp.length-1].y-grp[0].y)/(grp.length-1)/h,
+      x0:x0/w,x1:x1/w,bars:bars.map(function(b){return b/w;})
+    });
+  });
+  return staves;
+}
+
+function tabLabels(n){
+  if(n===4) return ['G','D','A','E'];
+  if(n===5) return ['G','D','A','E','B'];
+  return ['e','B','G','D','A','E'].slice(Math.max(0,6-n));
+}
+
+/* Ricostruisce una tablatura in testo da un rigo: note con le loro posizioni e battute. */
+function buildStaff(s,dw,maxW){
+  var n=s.lines.length,sp=s.sp,L0=s.lines[0],r;
+  var cs=s._chars.filter(function(c){ return /[\d()xX\/\\~^<>hpbrs.]/.test(c.c); });
+  var shift=medianOf(cs.map(function(c){ var q=(c.y-L0)/sp; return q-Math.round(q); }));
+  cs.forEach(function(c){ c._row=Math.max(0,Math.min(n-1,Math.round((c.y-L0)/sp-shift))); });
+  var tokens=[];
+  for(r=0;r<n;r++){
+    var rowCs=cs.filter(function(c){return c._row===r;}).sort(function(a,b){return a.x-b.x;});
+    var tok=null;
+    rowCs.forEach(function(c){
+      if(tok&&c.x-tok.end<=0.3*dw){ tok.t+=c.c; tok.end=c.x+c.w; }
+      else{ if(tok) tokens.push(tok); tok={t:c.c,x:c.x,end:c.x+c.w,row:r}; }
+    });
+    if(tok) tokens.push(tok);
+  }
+  tokens=tokens.filter(function(t){ return /[\dxX]/.test(t.t); }).sort(function(a,b){return a.x-b.x;});
+  var slots=[];
+  tokens.forEach(function(t){
+    var sl=slots[slots.length-1];
+    if(sl&&Math.abs(t.x-sl.x)<=0.6*dw){ sl.toks.push(t); if(t.end>sl.end)sl.end=t.end; if(t.t.length>sl.len)sl.len=t.t.length; if(t.x<sl.x)sl.x=t.x; }
+    else slots.push({x:t.x,end:t.end,len:t.t.length,toks:[t]});
+  });
+  slots.forEach(function(sl){ sl.cx=(sl.x+sl.end)/2; });
+  var bx=[s.x0].concat(s.bars.filter(function(b){return b>s.x0&&b<s.x1;}),[s.x1]).sort(function(a,b){return a-b;});
+  var edges=[bx[0]];
+  for(var i=1;i<bx.length;i++){ if(bx[i]-edges[edges.length-1]>=0.012) edges.push(bx[i]); }
+  if(edges.length<2) edges=[s.x0,s.x1];
+  var segs=[];
+  for(var j=0;j<edges.length-1;j++){
+    var lo=edges[j],hi=edges[j+1],last=(j===edges.length-2),first=(j===0);
+    var mine=slots.filter(function(sl){ return (first||sl.cx>=lo)&&(last||sl.cx<hi); });
+    var rows=[],q;
+    for(q=0;q<n;q++) rows.push('-');
+    if(!mine.length){ for(q=0;q<n;q++) rows[q]='---'; }
+    else{
+      var prev=null;
+      mine.forEach(function(sl){
+        if(prev){
+          var gap=Math.max(1,Math.min(3,Math.round((sl.x-prev.end)/dw*0.8)+1));
+          for(q=0;q<n;q++) rows[q]+=rep('-',gap);
+        }
+        for(q=0;q<n;q++){
+          var cell=null;
+          sl.toks.forEach(function(t){ if(t.row===q) cell=t.t; });
+          rows[q]+=cell?(cell+rep('-',sl.len-cell.length)):rep('-',sl.len);
+        }
+        prev=sl;
+      });
+      for(q=0;q<n;q++) rows[q]+='-';
+    }
+    segs.push({rows:rows,empty:!mine.length});
+  }
+  // il primo spazio vuoto prima della prima stanghetta è l'area della chiave, non una battuta
+  if(segs.length>1&&segs[0].empty) segs.shift();
+  segs=segs.map(function(sg){return sg.rows;});
+  var labels=tabLabels(n),blocks=[],curRows=null,curW=0;
+  function flush(){
+    if(!curRows) return;
+    blocks.push(curRows.map(function(body,ix){ return labels[ix]+'|'+body; }));
+    curRows=null; curW=0;
+  }
+  segs.forEach(function(rows){
+    var w=rows[0].length+1;
+    if(curRows&&curW+w>maxW) flush();
+    if(!curRows){ curRows=[]; for(var z=0;z<n;z++) curRows.push(''); }
+    for(var z2=0;z2<n;z2++) curRows[z2]+=rows[z2]+'|';
+    curW+=w;
+  });
+  flush();
+  return blocks;
+}
+
+function groupRows(arr){
+  var sorted=arr.slice().sort(function(a,b){return a.y-b.y;}),rows=[];
+  sorted.forEach(function(c){
+    var rw=rows[rows.length-1];
+    if(rw&&Math.abs(c.y-rw.y)<=Math.max(c.h,rw.h)*0.45){ rw.cs.push(c); rw.y=(rw.y*(rw.cs.length-1)+c.y)/rw.cs.length; if(c.h>rw.h)rw.h=c.h; }
+    else rows.push({y:c.y,h:c.h,cs:[c]});
+  });
+  return rows.map(function(rw){
+    rw.cs.sort(function(a,b){return a.x-b.x;});
+    var t='',p=null;
+    rw.cs.forEach(function(c){
+      if(c.c===' '){ if(t&&t.charAt(t.length-1)!==' ') t+=' '; p=c; return; }
+      if(p&&p.c!==' '&&p.c!=='/'&&c.c!=='/'){ var gap=c.x-(p.x+p.w); if(gap>2.5*p.w) t+='  '; }
+      t+=c.c; p=c;
+    });
+    t=t.replace(/\b([A-G][#b]?) (m(?:aj)?\d*)(?=\s|$)/g,'$1$2').replace(/ {3,}/g,'  ');
+    return {y:rw.y,h:rw.h,text:t};
+  });
+}
+
+/* Una pagina: elenco ordinato di annotazioni e righi di tablatura. */
+function buildPage(P,maxW){
+  var chars=P.chars,staves=P.staves||[];
+  var dw=medianOf(chars.filter(function(c){return /\d/.test(c.c);}).map(function(c){return c.w;}))||0.008;
+  var tabs=[];
+  staves.forEach(function(s){
+    var top=s.lines[0]-0.6*s.sp,bot=s.lines[s.lines.length-1]+0.6*s.sp;
+    var inside=chars.filter(function(c){ return c.y>=top&&c.y<=bot&&c.x>=s.x0-dw&&c.x<=s.x1+dw; });
+    var notes=inside.filter(function(c){return /[\dxX]/.test(c.c);}).length;
+    if(notes>=3){ s._chars=inside; inside.forEach(function(c){c._u=true;}); tabs.push(s); }
+  });
+  var items=[];
+  groupRows(chars.filter(function(c){return !c._u;})).forEach(function(r){
+    items.push({y:r.y,h:r.h,kind:'note',text:r.text});
+  });
+  tabs.forEach(function(s){
+    items.push({y:s.lines[0],kind:'tab',blocks:buildStaff(s,dw,maxW)});
+  });
+  items.sort(function(a,b){return a.y-b.y;});
+  return items;
+}
+
+function pagesToText(pageItems){
+  var title='',best=0;
+  pageItems.forEach(function(items,pi){
+    if(pi>0) return;
+    items.forEach(function(it){ if(it.kind==='note'&&it.h>best&&it.text.length>1){ best=it.h; title=it.text; } });
+  });
+  var out=[];
+  pageItems.forEach(function(items){
+    items.forEach(function(it){
+      if(it.kind==='note'){
+        var t=it.text.trim();
+        if(!t||t===title) return;
+        if(/^\d+\/\d+$/.test(t)||/^(\d+\.\s*)+$/.test(t)) return;
+        if(/^[\d()\s.\/]+$/.test(t)||/^(full\s*)+$/i.test(t)) return;
+        out.push('');
+        out.push('['+t.replace(/[\[\]]/g,'')+']');
+      }else{
+        it.blocks.forEach(function(b){ out.push(''); b.forEach(function(l){ out.push(l); }); });
+      }
+    });
+  });
+  return {title:title,text:out.join('\n').replace(/^\n+/,'')+'\n'};
+}
+
+function loadImageEl(src){
+  return new Promise(function(res){
+    var im=new Image();
+    im.onload=function(){res(im);}; im.onerror=function(){res(null);};
+    im.src=src;
+  });
+}
+function imageToGray(im){
+  var cv=document.createElement('canvas'); cv.width=im.naturalWidth; cv.height=im.naturalHeight;
+  var cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height); cx.drawImage(im,0,0);
+  var d=cx.getImageData(0,0,cv.width,cv.height).data,g=new Uint8Array(cv.width*cv.height);
+  for(var i=0,p=0;i<g.length;i++,p+=4) g[i]=(0.299*d[p]+0.587*d[p+1]+0.114*d[p+2])|0;
+  return {g:g,w:cv.width,h:cv.height};
+}
+
+/* Legge l'HTML nel browser (senza eseguire script), misura la posizione di ogni carattere. */
+function importPdfHtml(htmlStr,maxW){
+  maxW=maxW||56;
+  return new Promise(function(resolve,reject){
+    var f=document.createElement('iframe');
+    f.setAttribute('sandbox','allow-same-origin');
+    f.setAttribute('aria-hidden','true');
+    f.style.cssText='position:fixed;left:-20000px;top:0;width:1300px;height:1000px;border:0';
+    function done(fn,v){ try{ document.body.removeChild(f); }catch(e){} fn(v); }
+    f.onload=function(){
+      var doc=f.contentDocument,win=f.contentWindow;
+      var fonts=doc.fonts?Array.prototype.slice.call(doc.fonts):[];
+      Promise.all(fonts.map(function(ff){ return ff.load().catch(function(){}); })).then(function(){
+        var pages=Array.prototype.slice.call(doc.querySelectorAll('.pf'));
+        if(!pages.length){
+          var t=(doc.body&&doc.body.innerText)||'';
+          return {title:'',text:t};
+        }
+        var jobs=pages.map(function(pf){
+          var R=pf.getBoundingClientRect(),W=R.width,H=R.height,chars=[];
+          var walker=doc.createTreeWalker(pf,4,null),n;
+          while((n=walker.nextNode())){
+            var par=n.parentNode;
+            if(!par||!par.closest||!par.closest('.t')) continue;
+            if(win.getComputedStyle(par).visibility==='hidden') continue;
+            var s=n.nodeValue;
+            for(var i=0;i<s.length;i++){
+              var ch=s.charAt(i); if(/\s/.test(ch)) ch=' ';
+              var rg=doc.createRange(); rg.setStart(n,i); rg.setEnd(n,i+1);
+              var rc=rg.getClientRects(); if(!rc.length) continue;
+              var r=rc[0];
+              chars.push({c:ch,x:(r.left-R.left)/W,w:r.width/W,y:((r.top+r.bottom)/2-R.top)/H,h:r.height/H});
+            }
+          }
+          var img=pf.querySelector('img.bi'),src=img&&img.getAttribute('src');
+          return (src?loadImageEl(src):Promise.resolve(null)).then(function(im){
+            var staves=[];
+            if(im){ var G=imageToGray(im); staves=detectStaves(G.g,G.w,G.h); }
+            return {chars:chars,staves:staves};
+          });
+        });
+        return Promise.all(jobs).then(function(pp){
+          return pagesToText(pp.map(function(P){ return buildPage(P,maxW); }));
+        });
+      }).then(function(r){ done(resolve,r); },function(e){ done(reject,e); });
+    };
+    f.srcdoc=htmlStr;
+    document.body.appendChild(f);
+  });
+}
+/*#import-end*/
+
 
 /* ---------- stato e impostazioni ---------- */
 var S={bpm:120,bpb:4,bpc:1,click:true,cin:true,fs:22};
@@ -562,6 +838,22 @@ document.addEventListener('keydown',function(e){
   else if(e.key==='Home'){ e.preventDefault(); restart(); }
 });
 
+/* ---------- importazione di PDF convertiti in HTML ---------- */
+function looksLikeHtml(t){
+  return /^\s*(<!doctype html|<html|<\?xml)/i.test(t)||/<meta[^>]+pdf2htmlEX/i.test(t);
+}
+function importHtml(htmlStr,name,source){
+  $('meta').textContent='Sto leggendo il PDF convertito…';
+  return importPdfHtml(htmlStr).then(function(r){
+    if(!r.text||!r.text.trim()) throw new Error('vuoto');
+    var ttl=(source&&name)?name:((r.title||name||'').trim()||name);
+    applyText(r.text,ttl,source);
+  }).catch(function(){
+    $('meta').textContent='Non sono riuscito a leggere questo file HTML.';
+    $('panel').hidden=true;
+  });
+}
+
 /* ---------- pannello testo ---------- */
 function openPanel(){
   if(P.playing) pause();
@@ -581,7 +873,17 @@ function applyText(newText,newTitle,source){
 }
 $('btnText').addEventListener('click',openPanel);
 $('btnClose').addEventListener('click',closePanel);
-$('btnApply').addEventListener('click',function(){ applyText($('ta').value,$('titleIn').value); });
+$('btnApply').addEventListener('click',function(){
+  var v=$('ta').value;
+  if(looksLikeHtml(v)) importHtml(v,$('titleIn').value); else applyText(v,$('titleIn').value);
+});
+$('btnDownload').addEventListener('click',function(){
+  var name=($('titleIn').value||'brano').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'brano';
+  var blob=new Blob([$('ta').value],{type:'text/plain;charset=utf-8'});
+  var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name+'.txt';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },1500);
+});
 $('btnSample').addEventListener('click',function(){ $('ta').value=SAMPLE; $('titleIn').value=SAMPLE_TITLE; });
 $('btnFile').addEventListener('click',function(){ $('file').click(); });
 $('file').addEventListener('change',function(e){
@@ -590,7 +892,8 @@ $('file').addEventListener('change',function(e){
   var r=new FileReader();
   r.onload=function(){
     var name=f.name.replace(/\.[^.]+$/,'').replace(/[_]+/g,' ').trim();
-    applyText(String(r.result),name);
+    var content=String(r.result);
+    if(looksLikeHtml(content)) importHtml(content,name); else applyText(content,name);
   };
   r.readAsText(f);
   e.target.value='';
@@ -624,6 +927,7 @@ function openSong(i){
     if([0.5,1,2,4].indexOf(+s.bpc)>=0) S.bpc=+s.bpc;
     if([3,4,6].indexOf(+s.sig)>=0) S.bpb=+s.sig;
     saveSettings(); syncControls();
+    if(looksLikeHtml(t)) return importHtml(t,s.title,'repo:'+s.file);
     applyText(t,s.title,'repo:'+s.file);
   }).catch(function(){
     $('meta').textContent='Brano non disponibile: aprilo una volta con la rete accesa.';
