@@ -248,6 +248,14 @@ function isTab(line){
   return /^\s*[a-gA-G][#b]?\s*[|:]/.test(line)&&/-{2,}/.test(line)&&/^[\sa-gA-G#b|:\-\dxhpbrsv\/\\~^()<>.*=\[\]]+$/.test(line);
 }
 function parse(src){
+  // Normalizza i caratteri che Word, PDF e Markdown sostituiscono nelle tab
+  src=src.replace(/[\u2010-\u2015\u2212\uFE63\uFF0D]/g,'-')
+         .replace(/[\u2502\u2503\uFF5C\u00A6\u2223]/g,'|')
+         .replace(/\\([|_*\[\]-])/g,'$1')
+         .replace(/^[ ]*(?:```|~~~).*$/gm,'')
+         .replace(/\*\*|__/g,'')
+         .replace(/^[ ]*#{1,6}[ ]+(.+?)[ ]*:?[ ]*$/gm,'$1:')
+         .replace(/[\u00A0\u2007\u202F\u200B\uFEFF]/g,function(c){return (c==='\u200B'||c==='\uFEFF')?'':' ';});
   var lines=src.replace(/\r\n?/g,'\n').replace(/\t/g,'    ').split('\n');
   var blocks=[],cur=null,pending=null,tabBlk=null;
   for(var i=0;i<lines.length;i++){
