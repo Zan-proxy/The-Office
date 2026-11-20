@@ -5,5 +5,12 @@
     "bpm": 120,
     "bpc": 1,
     "sig": 4
+  },
+  {
+    "title": "Californication",
+    "file": "songs/californication.txt",
+    "bpm": 100,
+    "bpc": 1,
+    "sig": 4
   }
 ]
